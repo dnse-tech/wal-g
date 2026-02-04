@@ -1,0 +1,76 @@
+name: Build s390x CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.25"
+  USE_BROTLI: 1
+  USE_LIBSODIUM: 1
+  USE_LZO: 1
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-s390x:
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        os: [20.04, 22.04, 24.04]
+        db: [pg, redis, etcd]
+      fail-fast: false
+    runs-on: ubuntu-24.04
+    name: build-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/s390x
+
+      - name: Build s390x binary
+        run: |
+          docker run --rm --platform linux/s390x \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e USE_BROTLI=${{ env.USE_BROTLI }} \
+            -e USE_LIBSODIUM=${{ env.USE_LIBSODIUM }} \
+            -e USE_LZO=${{ env.USE_LZO }} \
+            ${{ matrix.db == 'etcd' && '-e ETCD_UNSUPPORTED_ARCH=s390x' || '' }} \
+            ubuntu:${{ matrix.os }} \
+            bash -c '
+              set -euxo pipefail
+              apt-get update
+              apt-get install -y liblzo2-dev brotli libsodium-dev curl git cmake build-essential tzdata ca-certificates
+              curl -fsSL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-s390x.tar.gz | tar -C /usr/local -xz
+              export PATH=$PATH:/usr/local/go/bin:/root/go/bin
+              export GOPATH=/root/go
+              git config --global --add safe.directory /workspace
+              git config --global --add safe.directory /workspace/submodules/brotli
+              go get -v -t ./...
+              make deps
+              make ${{ matrix.db }}_build
+              echo "Build successful: wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x"
+            '
+
+      - name: Verify binary
+        run: |
+          ls -la main/${{ matrix.db }}/wal-g
+          file main/${{ matrix.db }}/wal-g
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+          path: main/${{ matrix.db }}/wal-g
+          retention-days: 7
+          if-no-files-found: ignore

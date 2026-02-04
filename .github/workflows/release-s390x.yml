@@ -1,0 +1,108 @@
+name: Release s390x binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g., v3.0.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.25"
+  USE_BROTLI: 1
+  USE_LIBSODIUM: 1
+  USE_LZO: 1
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  release-s390x:
+    permissions:
+      contents: write
+    timeout-minutes: 90
+    strategy:
+      matrix:
+        os: [20.04, 22.04, 24.04]
+        db: [pg, redis, etcd]
+      fail-fast: false
+    runs-on: ubuntu-24.04
+    name: wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+    steps:
+      - name: Validate tag format
+        if: inputs.tag != ''
+        run: |
+          TAG="${{ inputs.tag }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Invalid tag format: $TAG"
+            exit 1
+          fi
+
+      - name: Determine tag
+        id: tag
+        run: |
+          if [[ -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: linux/s390x
+
+      - name: Build s390x binary
+        run: |
+          docker run --rm --platform linux/s390x \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            -e USE_BROTLI=${{ env.USE_BROTLI }} \
+            -e USE_LIBSODIUM=${{ env.USE_LIBSODIUM }} \
+            -e USE_LZO=${{ env.USE_LZO }} \
+            ${{ matrix.db == 'etcd' && '-e ETCD_UNSUPPORTED_ARCH=s390x' || '' }} \
+            ubuntu:${{ matrix.os }} \
+            bash -c '
+              set -euxo pipefail
+              apt-get update
+              apt-get install -y liblzo2-dev brotli libsodium-dev curl git cmake build-essential tzdata ca-certificates
+              curl -fsSL https://go.dev/dl/go${{ env.GO_VERSION }}.linux-s390x.tar.gz | tar -C /usr/local -xz
+              export PATH=$PATH:/usr/local/go/bin:/root/go/bin
+              export GOPATH=/root/go
+              git config --global --add safe.directory /workspace
+              git config --global --add safe.directory /workspace/submodules/brotli
+              go get -v -t ./...
+              make deps
+              make ${{ matrix.db }}_build
+              mv main/${{ matrix.db }}/wal-g /workspace/wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+            '
+
+      - name: Compress binary
+        run: tar --owner=0 --group=0 -zcvf wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.tar.gz wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+
+      - name: Calculate checksums
+        run: |
+          sha256sum wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x > wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.sha256
+          sha256sum wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.tar.gz > wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.tar.gz.sha256
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: |
+            wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x
+            wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.tar.gz
+            wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.sha256
+            wal-g-${{ matrix.db }}-ubuntu${{ matrix.os }}-s390x.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
