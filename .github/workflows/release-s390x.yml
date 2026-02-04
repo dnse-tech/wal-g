@@ -67,6 +67,7 @@ jobs:
           docker run --rm --platform linux/s390x \
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
+            -e DEBIAN_FRONTEND=noninteractive \
             -e USE_BROTLI=${{ env.USE_BROTLI }} \
             -e USE_LIBSODIUM=${{ env.USE_LIBSODIUM }} \
             -e USE_LZO=${{ env.USE_LZO }} \
