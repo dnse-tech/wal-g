@@ -12,6 +12,7 @@ concurrency:
 
 env:
   GO_VERSION: "1.25.6"
+  GOEXPERIMENT: jsonv2
   USE_BROTLI: 1
   USE_LIBSODIUM: 1
   USE_LZO: 1
@@ -42,6 +43,7 @@ jobs:
             -v ${{ github.workspace }}:/workspace \
             -w /workspace \
             -e DEBIAN_FRONTEND=noninteractive \
+            -e GOEXPERIMENT=${{ env.GOEXPERIMENT }} \
             -e USE_BROTLI=${{ env.USE_BROTLI }} \
             -e USE_LIBSODIUM=${{ env.USE_LIBSODIUM }} \
             -e USE_LZO=${{ env.USE_LZO }} \
